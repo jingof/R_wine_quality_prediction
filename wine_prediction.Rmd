@@ -1,0 +1,392 @@
+---
+title: "Wine Prediction"
+author: "FRANCIS JINGO"
+date: "May-10-2021"
+output:
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#We start with loading the data sets containing the two wine types.
+
+if(!require(tidyverse)) install.packages("tidyverse")
+
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+#if(!require(psych)) install.packages('psych')
+if(!require(glmnet)) install.packages('glmnet', dependencies=TRUE, type="binary")
+
+library(dplyr)
+library(tidyverse)
+library(caret)
+library(tidyr)
+library(psych)
+library(ggplot2)
+library(glmnet)
+
+
+options(warn=-1)
+
+
+# Importing the wine dataset to work with.
+wine_data=read_csv("./datasets/winequality.csv")
+#head(wine_data)
+
+########################################################
+# Create accuracy function
+########################################################
+
+# Where pred is the vector of the predicted ratings
+test_accuracy <- function(pred,actual)
+{
+  val<-(actual - pred)
+  len<-length(which(val==0))
+  len/length(pred)
+}
+
+############################################################
+# A method that appends items from one list to another list.
+############################################################
+
+# where items in list2 are added to list1
+addElements <- function(list1,list2){
+  len1 <- length(list1)
+  i <- len1+1
+  a<-1
+  len2 <- length(list2)
+  while(a <= len2){
+    list1[i] <- list2[a]
+    a <-a+1
+    i<-i+1
+  }
+  list1
+}
+
+############################################################
+# A method that checks a column for the ootliers in it.
+############################################################
+
+# where dt is the whole dataframe and col is the column with the outliers
+FindOutliers <- function(dt,col){
+    sd <- as.numeric(sapply(dt[col],sd))
+    med <- as.numeric(sapply(dt[col],median))
+    lowerq <- med - (sd*3)
+    upperq <- med + (sd*3)
+    which(dt[col]>upperq | dt[col]<lowerq)
+}
+
+
+```
+
+# HarvardX: Data Science: Capstone
+
+## Introduction
+
+Wine is a drink consumed at large scale by majority of the global population (https://wineinstitute.org). The makers must be able to ensure quality of their production, otherwise the demand for the particular brand will go down as well as the market share. Based on this, most wine manufacturers have resorted to discovering ways to improve the quality and this has led to most of them using machine learning. The aim is to determine the quality of the product based on the ingredients used during the manufacturing process.We are going to use two types of wine that is red wine and white wine.
+
+The project can be accessed via this link on github (https://github.com/jingof/R_wine_quality_prediction.git).
+
+The ingredients used in this notebook include: `['wine_type','fixed acidity', 'volatile acidity', 'citric acid', 'residual sugar', 'chlorides', 'free sulfur dioxide', 'total sulfur dioxide', 'density', 'pH', 'sulphates', 'alcohol']` and these are considered the predictor features. The output feature is 'quality'.
+
+## Methods
+In this section, I discuss about the methods used in this project.
+
+### Test accuracy
+This is used to test the accuracy of our prediction, we look at the values that are exactly the same as in the model, and consider those a success, otherwise our prediction is false, this ensures out accuracy is as factual as possible.
+```{r, echo=TRUE}
+test_accuracy <- function(pred,actual)
+{
+  val<-(actual - pred)
+  len<-length(which(val==0))
+  len/length(pred)
+}
+```
+
+### Add Elements
+This is used to add elements from one list to another list where items in list2 are added to list1.
+```{r, echo=TRUE}
+addElements <- function(list1,list2){
+  len1 <- length(list1)
+  i <- len1+1
+  a<-1
+  len2 <- length(list2)
+  while(a <= len2){
+    list1[i] <- list2[a]
+    a <-a+1
+    i<-i+1
+  }
+  list1
+}
+
+```
+
+### Find Outliers
+This is used to determine which values in the dataset are considered outliers based on median and standard deviation where dt is the whole dataframe and col is the column with the outliers.
+```{r, echo=TRUE}
+FindOutliers <- function(dt,col){
+    sd <- as.numeric(sapply(dt[col],sd))
+    med <- as.numeric(sapply(dt[col],median))
+    lowerq <- med - (sd*3)
+    upperq <- med + (sd*3)
+    which(dt[col]>upperq | dt[col]<lowerq)
+}
+
+```
+
+### Data exploration and visualization
+The datset is explored to have an understanding of some of its elements. Below are the top rows in the dataset.
+```{r, echo=TRUE}
+head(wine_data)
+```
+
+Next we look at the structure of the dataset since we have two wine types, it is better to dig into both of them to understand the dataset better. We start with the information to know how many null values we have as well as the data types.
+```{r, echo=TRUE}
+colSums(is.na(wine_data))
+```
+
+Next we look at the shapes of the entire wine dataset. We then look at the white wine data and the red wine data contained in the dataset.
+```{r, echo=TRUE}
+dim(wine_data)
+red_wine <- wine_data %>% filter(wine_type=='Red') %>% select(-wine_type)
+dim(red_wine)
+white_wine <- wine_data %>% filter(wine_type=='White') %>% select(-wine_type)
+dim(white_wine)
+```
+
+Looking at the quality summary for the datasets.
+```{r, echo=TRUE}
+summary(wine_data$quality)
+summary(red_wine$quality)
+summary(white_wine$quality)
+```
+
+Plotting the distribution count of the wine dataset to see the counts between the white wine and the red wine.
+
+```{r, echo=FALSE}
+wine_data %>% ggplot(aes(wine_type))+ 
+  geom_histogram(binwidth = 0.1, stat='count', color=rainbow(2))+
+  ggtitle('BarPlot showing count by wine type')
+```
+
+From the above, we can see that the white wine dataset has more rows meaning it has more observations. We also see that the data has no null values and has 12 predictor columns and one dependent column. Further, we can tell that all predictor columns are numerical except for wine type, to make this numerical, we shall have to create two categorical features having 1 or 0, one for red wine, another for white wine. We can also see that no column is categorical except for the two we create below.
+```{r, echo=FALSE}
+wine_data <- wine_data %>% mutate(red=ifelse(wine_type=='Red',1,0),white=ifelse(wine_type=='White',1,0)) %>% select(-wine_type)
+y=wine_data$quality
+wine_data <- wine_data %>% select(-quality) %>% mutate(quality=y)
+```
+
+Next, we look at the dependent column to determine the nature of the values in the column. From the below, we can tell that it is an integer rank ranging from 0 of 10.
+```{r, echo=TRUE}
+unique(wine_data$quality)
+```
+
+We now look at correlation, we could print out the `correlation matrix` of the columns however i think using a `heatmap` might be prefferable since it is easier to spot very highly correlated and very lowly correlated columns than on the matrix, lets have a look.
+```{r, echo=TRUE}
+corPlot(wine_data,scale=FALSE,xlas=2,upper=FALSE,main='Wine data correlation plot')
+```
+
+We then calculate the average of each feature for the red and white wines separately using mean() function and plot bar graph to show comparison.
+This will help us understand the basic average between the quantities of ingredients used for the two different wine datasets. From below we can see that most features have an almost similar mean 2 for the two datasets except for free sulfurdioxide and total sulfur dioxide which have a significant difference between the two means. We can also plot these to have a visualization.
+```{r, echo=TRUE}
+red_means <- red_wine %>% colMeans()
+white_means <- white_wine %>% colMeans()
+wine_data2 <- wine_data %>% select(-red,-white)
+
+wine_means <- structure(list(columns = c(colnames(wine_data2)), 
+                White = c(white_means),Red = c(red_means)), 
+                 class = "data.frame", 
+                 row.names = c('1','2','3','4','5','6','7','8','9','10','11', '12'))
+
+wine_means %>%
+  pivot_longer(cols = -columns) %>%
+  ggplot(aes(x = columns, y = value, fill = name)) + 
+  geom_col(position = 'dodge')+
+  theme(axis.text.x = element_text(angle = 70, hjust = 1))+
+  ggtitle('Mean values of features for red and white wine')
+
+```
+
+
+## Graph Description
+White wine generally has a higher mean for most of the values meaning that it requires more ingredients and therefore is more expensive to make. However, the cost does not necessarily lead to better quality since the mean value for the quality is the same.
+
+## Outliers 
+These are biased observations that may make our data analysis inaccurate. They are 3 standard deviations away from the median. We can perform a box plot to check if there are any outliers.
+```{r,echo=FALSE}
+boxplot(x = wine_data2, las=2, main='BoxPlot of the wine dataset')
+```
+
+We can also have the outliers count in a data frame to correctly see how many outliers each column has. From the below we can see that 8 columns have less than 100 rows with outliers.  
+```{r,echo=FALSE}
+cols <- c(colnames(wine_data2))
+outlier_data <- data.frame(columns = cols)
+outlier_count <- c()
+outlier_indexes <- c()
+i <-1
+for(col in cols) {
+  lis <- FindOutliers(wine_data2,col)
+  outlier_indexes <- addElements(outlier_indexes, c(lis))
+  outlier_count[i] <- length(lis)
+  i <- i+1
+}
+outlier_indexes <- unique(outlier_indexes)
+outlier_data <- outlier_data %>% mutate(outliers = outlier_count)
+outlier_data
+```
+
+
+Looking at the `outlier_index` to determine how many unique values are there to determine how many rows will actually fall under outliers.
+```{r, echo=FALSE}
+outlier_len <- length(outlier_indexes)
+percentage <- round(outlier_len*100/nrow(wine_data),2)
+```
+
+We have `714 rows` as outliers, this is `10.99%` percent of the data, which is a huge number
+Instead of dropping these rows, we can have it as a categorical feature.
+```{r, echo=FALSE}
+outlier_col <- rep(0,nrow(wine_data))
+for(ind in outlier_indexes){
+  outlier_col[ind] = 1
+}
+wine_data <- wine_data %>% mutate(is_outlier = outlier_col)
+```
+
+## Data train test split.
+We split the dataset into train and test datasets into portions of `66%` to `33%` respectively. The train dataset has `4288 rows` and the test dataset has `2209 rows`.
+```{r, echo=FALSE}
+set.seed(27)
+n <- nrow(wine_data)
+train_rows <- sample(1:n,.66*n)
+train <- wine_data[train_rows,]
+
+X_train <- train %>% select(-quality)
+y_train <- train %>% select(quality)
+
+test <- wine_data[-train_rows,]
+X_test <- test %>% select(-quality)
+y_test <- test %>% select(quality)
+y_test <-as.numeric(unlist(y_test))
+```
+
+## Feature Importance and Selection.
+I opted to use Lasso to study the features, their importance to the dependent variable and for feature selection. I use Lasso and cross-validation to provide a plot of MSE for the wine data. An explanation on how LASSO selects features is also given below.
+
+```{r,echo=FALSE}
+fit.lasso <- glmnet(as.matrix(X_train), as.matrix(y_train), family='gaussian', alpha=c(0:2,0.1))
+
+# 10-fold Cross validation for each alpha = 0, 0.1, ... , 0.9, 1.0
+fit.lasso.cv <- cv.glmnet(as.matrix(X_train), as.matrix(y_train), type.measure='mse', alpha=1, family='gaussian', standardize=TRUE)
+
+par(mfrow=c(1,1))
+# For plotting options, type '?plot.glmnet' in R console
+plot(fit.lasso, xvar="lambda")
+
+plot(fit.lasso.cv)
+```
+
+For feature selection, I use Lasso to get features with the hisghest Importance and compare this with theie respective correlation with the dependent variable(`quality`).
+```{r, echo=FALSE}
+'%ni%'<-Negate('%in%')
+glmnet1<-cv.glmnet(
+      x=as.matrix(X_train),
+      y=as.matrix(y_train),
+      type.measure='mse',nfolds=20,alpha=1,
+      standardize=TRUE)
+
+c<-coef(glmnet1,s='lambda.1se',exact=TRUE)
+inds<-which(c!=0)
+variables<-row.names(c)[inds]
+variables<-variables[variables %ni% '(Intercept)']
+variables
+
+
+lasso_imp <- c(as.matrix(c))[-1]
+barplot(height=abs(lasso_imp),names=colnames(X_train), las=2, col=rainbow(15), main='Barplot showing lasso feature importance with quality.')
+
+corr <- as.numeric(cor(train)['quality',])
+corr<-corr[!corr==1]
+barplot(height=abs(corr),names=colnames(X_train), las=2, col=rainbow(15), main='Barplot showing correlation of features with quality')
+
+importance <- data.frame(Features=colnames(X_train),lasso=abs(lasso_imp),correlation=abs(corr))
+importance
+
+```
+
+## Lasso Explanation.
+Using Linear Regression with L1 regularization is called Lasso Regularization. Given a dataset with features and dependent variables We have different features or variables in our data which we denote by x1, x2, …, xn. 
+
+The learnable or trainable parameters in our models are $A_0$, $A_1$, …, $A_n$. After training some values will be assigned to $A$ parameters. If we observe the solution the larger the values of $A$ the larger effect it will have on the solution and vice versa. Thus, we can decide upon some threshold value and we can keep all those variables for which the corresponding $A$ values are larger than the threshold value and discard the others. The larger the threshold values the smaller the number of parameters we will keep and vice versa. The selected features can then be used to train the models. Of course, there are other things as well to improve the dataset like normalizing the values and handling the missing data before proceeding to train the model and there are other ways of feature selection. But I liked this idea of using regularization for feature selection. This is a nice way of reducing dimensionality by removing not so important features.
+
+**LASSO.**
+
+**The advantages.**
+
++ As any regularization method, it can avoid overfitting. It can be applied even when number of features is larger than number of data.
++ It can do feature selection.
++ It is fast in terms of inference and fitting.
+
+**The disadvantages.**
+
++ It ignores nonsignificant variables that may, nevertheless, be interesting or important.
++ It doesn’t follow the hierarchy principle.
++ The model selected by lasso is not always stable.
++ When there are highly correlated features, lasso may randomly select one of them of part of them.
++ It is an automatic model selection technique and is susceptible to error.
+
+
+Because of the above facts, I decided to use the variables from the Lasso Regressor. We can go on to compare the Lasso regressor to other regressor models, we are going to use only the features selected by Lasso, to compare the Lasso regressor to:-
+
++ KNN regressor
++ Decision Tree
++ Random Forest
+
+```{r,echo=FALSE}
+train <- train %>% select(all_of(variables))%>% mutate(quality=unlist(y_train))
+X_test <- X_test %>% select(all_of(variables))
+
+accuracys <- c()
+control <- trainControl(method = "cv",  
+                           number = 5,
+                           repeats = 3,
+                           classProbs = T)
+
+# lasso
+set.seed(27)
+lasso <- train(quality ~ ., method = "lasso", data = train, trControl = control)
+y_hat_lasso <- round(predict(lasso, X_test))
+lasso_accuracy <- test_accuracy(y_hat_lasso, y_test)
+accuracys[1]<-lasso_accuracy
+
+
+# random forest
+rf <- train(quality ~ ., method = "rf", data = train, trControl = control)
+y_hat_rf <- round(predict(rf, X_test))
+rf_accuracy <- test_accuracy(y_hat_rf, y_test)
+accuracys[2] <- rf_accuracy
+
+
+# knn cv
+knn <- train(quality ~ ., method='knn', data=train,tuneGrid=data.frame(k=seq(3, 51, 2)), trControl=control)
+y_hat_knn <- round(predict(knn, X_test))
+knn_accuracy <- test_accuracy(y_hat_knn, y_test)
+accuracys[3] <- knn_accuracy
+
+
+# decision tree
+dt <- train(quality ~ ., method = 'rpart', data = train,tuneGrid = data.frame(cp = seq(0, 0.05, 0.002)), trControl=control)
+y_hat_dt <- round(predict(dt, X_test))
+dt_accuracy <- test_accuracy(y_hat_dt, y_test)
+accuracys[4] <- dt_accuracy
+
+
+models <- c('lasso','random forest','knn cv','decision tree')
+
+models_accuracy <- data.frame(MODELS=models,ACCURACYS=accuracys)
+models_accuracy
+
+```
+
+## Conclusion
+From the above, we can see that the overall best model that gives the best accuracy is is the Random Forest. Therefore in conclusion, to be able to get the best prediction for the wine quality based on the quantity of ingredients, we can use the Lasso regularization model to perform the feature selection after which we use the Random Forest to predict the quality, we can also always improve our model by turning the parameters for the Random Forest differently.
+
